@@ -3,6 +3,7 @@ const QUICK_USERS=['Alex Tutt','Christoph Leiber','Dirk Henseler','Dominic Kuhl'
 let token='',user='',users=[],employees=[],selectedUser='',currentPreview=null,action='Ausgabe';
 let scanner=null,cameras=[],cameraIndex=0,running=false,lastCode='',lastAt=0;
 let currentLabelDevice=null,qrMode='new';
+let devices=[],overviewFilter='all',overviewSort='changed-desc',overviewLoaded=false,overviewLoadedAt=null,currentPage='booking';
 const $=id=>document.getElementById(id);
 
 window.addEventListener('DOMContentLoaded',init);
@@ -26,7 +27,11 @@ function bind(){
   $('logoutBtn').onclick=logout;$('startBtn').onclick=startScanner;$('stopBtn').onclick=stopScanner;
   $('switchBtn').onclick=switchCamera;$('previewBtn').onclick=previewManual;
   $('issueBtn').onclick=()=>setAction('Ausgabe');$('returnBtn').onclick=()=>setAction('Rücknahme');$('bookBtn').onclick=book;
-  $('bookingNav').onclick=()=>showPage('booking');$('qrNav').onclick=()=>showPage('qr');
+  $('bookingNav').onclick=()=>showPage('booking');$('overviewNav').onclick=()=>showPage('overview');$('qrNav').onclick=()=>showPage('qr');
+  $('refreshOverviewBtn').onclick=()=>loadOverview(true);$('clearOverviewSearch').onclick=clearOverviewSearch;
+  $('overviewSearch').addEventListener('input',renderOverview);$('overviewSort').addEventListener('change',()=>{overviewSort=$('overviewSort').value;renderOverview()});
+  $('overviewFilters').addEventListener('click',e=>{const b=e.target.closest('[data-overview-filter]');if(b)setOverviewFilter(b.dataset.overviewFilter)});
+  document.querySelector('.overview-stats').addEventListener('click',e=>{const b=e.target.closest('[data-overview-filter]');if(b)setOverviewFilter(b.dataset.overviewFilter)});
   $('newQrMode').onclick=()=>setQrMode('new');$('reprintQrMode').onclick=()=>setQrMode('reprint');
   $('nextIdBtn').onclick=refreshNextId;$('createDeviceBtn').onclick=createDevice;
   $('loadDeviceBtn').onclick=loadDeviceForReprint;$('downloadLabelBtn').onclick=downloadLabel;$('printLabelBtn').onclick=printLabel;
@@ -93,16 +98,20 @@ async function login(){
     $('loginView').classList.add('hidden');$('appView').classList.remove('hidden');$('pin').value='';showPage('booking');refreshNextId();
   }catch(e){show('loginMsg',e.message)}finally{busy($('loginBtn'),false)}
 }
-async function logout(){await stopScanner();try{if(token)await jsonp('logout',{token})}catch(_){}token='';user='';selectedUser='';currentPreview=null;currentLabelDevice=null;
-  $('appView').classList.add('hidden');$('loginView').classList.remove('hidden');$('deviceCard').classList.add('hidden');$('bookingCard').classList.add('hidden');$('labelCard').classList.add('hidden');showPersonStep();
+async function logout(){await stopScanner();try{if(token)await jsonp('logout',{token})}catch(_){}token='';user='';selectedUser='';currentPreview=null;currentLabelDevice=null;devices=[];overviewLoaded=false;overviewLoadedAt=null;overviewFilter='all';currentPage='booking';
+  $('appView').classList.add('hidden');$('loginView').classList.remove('hidden');$('deviceCard').classList.add('hidden');$('bookingCard').classList.add('hidden');$('labelCard').classList.add('hidden');$('deviceList').innerHTML='';showPersonStep();
 }
 function fillEmployees(){const sel=$('employee');sel.innerHTML='<option value="">Bitte auswählen</option>';employees.forEach(e=>{const o=document.createElement('option');o.value=e.name;o.textContent=e.name;sel.appendChild(o)})}
 
-async function showPage(page){
-  const booking=page==='booking';
-  $('bookingPage').classList.toggle('hidden',!booking);$('qrPage').classList.toggle('hidden',booking);
-  $('bookingNav').classList.toggle('active',booking);$('qrNav').classList.toggle('active',!booking);
-  if(booking){setTimeout(startScanner,150)}else{await stopScanner();if(!$('newDeviceId').value)refreshNextId()}
+async function showPage(page,options={}){
+  currentPage=page;
+  const booking=page==='booking',overview=page==='overview',qr=page==='qr';
+  $('bookingPage').classList.toggle('hidden',!booking);$('overviewPage').classList.toggle('hidden',!overview);$('qrPage').classList.toggle('hidden',!qr);
+  $('bookingNav').classList.toggle('active',booking);$('overviewNav').classList.toggle('active',overview);$('qrNav').classList.toggle('active',qr);
+  if(booking){if(options.autoScan!==false)setTimeout(()=>{if(currentPage==='booking')startScanner()},150)}else{await stopScanner()}
+  if(overview)await loadOverview(false);
+  if(qr&&!$('newDeviceId').value)refreshNextId();
+  window.scrollTo({top:0,behavior:'smooth'});
 }
 
 async function startScanner(){
@@ -129,7 +138,7 @@ function setAction(a){action=a;$('issueBtn').classList.toggle('active',a==='Ausg
 async function book(){
   hide('bookingMsg');const raw=$('rawQr').value.trim();if(!raw)return show('bookingMsg','Bitte zuerst ein Gerät scannen.');if(action==='Ausgabe'&&!$('employee').value)return show('bookingMsg','Bitte Mitarbeiter auswählen.');
   busy($('bookBtn'),true);
-  try{const res=await jsonp('bookDevice',{data:{token,rawQr:raw,action,employee:$('employee').value,location:$('location').value.trim(),note:$('note').value.trim(),manualName:$('manualName').value.trim()}});show('bookingMsg',res.message||'Gespeichert.','ok');resetAfterBooking()}catch(e){show('bookingMsg',e.message)}finally{busy($('bookBtn'),false)}
+  try{const res=await jsonp('bookDevice',{data:{token,rawQr:raw,action,employee:$('employee').value,location:$('location').value.trim(),note:$('note').value.trim(),manualName:$('manualName').value.trim()}});show('bookingMsg',res.message||'Gespeichert.','ok');overviewLoaded=false;resetAfterBooking()}catch(e){show('bookingMsg',e.message)}finally{busy($('bookBtn'),false)}
 }
 function resetAfterBooking(){$('rawQr').value='';$('manualName').value='';$('employee').value='';$('location').value='';$('note').value='';currentPreview=null;$('deviceCard').classList.add('hidden');setTimeout(()=>{startScanner();$('reader').scrollIntoView({behavior:'smooth',block:'center'})},900)}
 
@@ -154,7 +163,7 @@ async function createDevice(){
   busy($('createDeviceBtn'),true);
   try{
     const res=await jsonp('createDevice',{data});
-    currentLabelDevice=res.device;await renderLabel(currentLabelDevice);show('createDeviceMsg',res.message||'Gerät wurde angelegt.','ok');
+    currentLabelDevice=res.device;overviewLoaded=false;await renderLabel(currentLabelDevice);show('createDeviceMsg',res.message||'Gerät wurde angelegt.','ok');
     $('newDeviceId').value=res.nextId||'';$('newDeviceName').value='';$('newDeviceModel').value='';$('newDeviceManufacturer').value='';$('newDeviceSerial').value='';$('newDeviceLocation').value='Lager';
     $('labelCard').scrollIntoView({behavior:'smooth',block:'start'});
   }catch(e){show('createDeviceMsg',e.message)}finally{busy($('createDeviceBtn'),false)}
@@ -165,6 +174,98 @@ async function loadDeviceForReprint(){
   busy($('loadDeviceBtn'),true);
   try{const res=await jsonp('getDeviceForQr',{token,id});currentLabelDevice=res.device;await renderLabel(currentLabelDevice);show('reprintDeviceMsg','Gerät gefunden. Etikett kann gedruckt werden.','ok');$('labelCard').scrollIntoView({behavior:'smooth',block:'start'})}catch(e){show('reprintDeviceMsg',e.message)}finally{busy($('loadDeviceBtn'),false)}
 }
+
+
+async function loadOverview(force=false){
+  if(!token)return;
+  if(overviewLoaded&&!force){renderOverview();return}
+  hide('overviewMessage');$('overviewLoading').classList.remove('hidden');$('deviceList').classList.add('hidden');$('overviewEmpty').classList.add('hidden');
+  busy($('refreshOverviewBtn'),true);
+  try{
+    const res=await jsonp('getDevices',{token});
+    devices=Array.isArray(res.devices)?res.devices:[];overviewLoaded=true;overviewLoadedAt=new Date();
+    updateOverviewStats();renderOverview();
+  }catch(e){show('overviewMessage',e.message);$('deviceList').innerHTML=''}
+  finally{$('overviewLoading').classList.add('hidden');$('deviceList').classList.remove('hidden');busy($('refreshOverviewBtn'),false)}
+}
+
+function deviceStatusGroup(device){
+  const s=String(device?.status||'').trim().toLowerCase();
+  if(s.includes('ausgegeben'))return 'ausgegeben';
+  if(s.includes('lager'))return 'lager';
+  return 'unklar';
+}
+function statusLabel(device){const g=deviceStatusGroup(device);return g==='lager'?'Im Lager':g==='ausgegeben'?'Ausgegeben':'Unklar'}
+function statusClass(device){const g=deviceStatusGroup(device);return g==='lager'?'in-stock':g==='ausgegeben'?'issued':'unclear'}
+function updateOverviewStats(){
+  const counts={all:devices.length,lager:0,ausgegeben:0,unklar:0};devices.forEach(d=>counts[deviceStatusGroup(d)]++);
+  $('statAll').textContent=counts.all;$('statStock').textContent=counts.lager;$('statIssued').textContent=counts.ausgegeben;$('statUnclear').textContent=counts.unklar;
+}
+function setOverviewFilter(filter){
+  overviewFilter=['all','lager','ausgegeben','unklar'].includes(filter)?filter:'all';
+  document.querySelectorAll('[data-overview-filter]').forEach(b=>b.classList.toggle('active',b.dataset.overviewFilter===overviewFilter));
+  renderOverview();
+}
+function clearOverviewSearch(){$('overviewSearch').value='';$('clearOverviewSearch').classList.add('hidden');$('overviewSearch').focus();renderOverview()}
+function searchableDeviceText(d){return [d.id,d.name,d.model,d.manufacturer,d.serial,d.status,d.employee,d.location,d.handledBy].join(' ').toLocaleLowerCase('de')}
+function compareDeviceIds(a,b){
+  const ai=normalizeClientId(a.id),bi=normalizeClientId(b.id),an=Number(ai),bn=Number(bi);
+  if(Number.isFinite(an)&&Number.isFinite(bn))return an-bn;
+  return ai.localeCompare(bi,'de',{numeric:true,sensitivity:'base'});
+}
+function deviceLocationText(d){return deviceStatusGroup(d)==='ausgegeben'?(d.employee||d.location||'Nicht zugeordnet'):(d.location||d.employee||'Nicht zugeordnet')}
+function changedTime(d){const n=Date.parse(d.changedAt||'');return Number.isFinite(n)?n:0}
+function getFilteredDevices(){
+  const terms=$('overviewSearch').value.trim().toLocaleLowerCase('de').split(/\s+/).filter(Boolean);
+  let result=devices.filter(d=>(overviewFilter==='all'||deviceStatusGroup(d)===overviewFilter)&&terms.every(t=>searchableDeviceText(d).includes(t)));
+  const sort=$('overviewSort').value||overviewSort;
+  result.sort((a,b)=>sort==='id-asc'?compareDeviceIds(a,b):sort==='name-asc'?String(a.name||'').localeCompare(String(b.name||''),'de',{numeric:true,sensitivity:'base'}):sort==='location-asc'?deviceLocationText(a).localeCompare(deviceLocationText(b),'de',{numeric:true,sensitivity:'base'}):changedTime(b)-changedTime(a));
+  return result;
+}
+function renderOverview(){
+  if(!overviewLoaded)return;
+  const hasSearch=Boolean($('overviewSearch').value);$('clearOverviewSearch').classList.toggle('hidden',!hasSearch);
+  const result=getFilteredDevices();$('overviewResultCount').textContent=`${result.length} ${result.length===1?'Gerät':'Geräte'}`;
+  $('overviewUpdatedAt').textContent=overviewLoadedAt?`Stand: ${new Intl.DateTimeFormat('de-DE',{hour:'2-digit',minute:'2-digit'}).format(overviewLoadedAt)} Uhr`:'Noch nicht geladen';
+  $('overviewEmpty').classList.toggle('hidden',result.length>0);$('deviceList').innerHTML=result.map(deviceCardHtml).join('');
+  document.querySelectorAll('[data-device-card]').forEach(card=>{
+    card.onclick=()=>openDeviceDetails(card.dataset.deviceCard);
+    card.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openDeviceDetails(card.dataset.deviceCard)}};
+  });
+}
+function deviceCardHtml(d){
+  const cls=statusClass(d),where=deviceLocationText(d),secondary=deviceStatusGroup(d)==='ausgegeben'?(d.location?`Einsatzort: ${d.location}`:'Kein Einsatzort hinterlegt'):'Aktueller Standort';
+  const model=[d.manufacturer,d.model].filter(Boolean).join(' · ')||'Hersteller / Modell nicht hinterlegt';
+  return `<article class="device-list-card" data-device-card="${escapeAttr(normalizeClientId(d.id))}" tabindex="0" role="button" aria-label="Details zu ${escapeAttr(d.name||d.id)} öffnen">
+    <div class="device-card-top"><div class="device-card-title"><small>${escapeHtml(formatDeviceId(d.id))}</small><strong>${escapeHtml(d.name||'Ohne Bezeichnung')}</strong></div><span class="status-pill ${cls}">${escapeHtml(statusLabel(d))}</span></div>
+    <div class="device-card-location"><span class="material-symbols-rounded">${deviceStatusGroup(d)==='ausgegeben'?'person_pin_circle':'location_on'}</span><div><strong>${escapeHtml(where)}</strong><small>${escapeHtml(secondary)}</small></div></div>
+    <div class="device-card-meta"><span>${escapeHtml(model)}</span>${d.serial?`<span>SN: ${escapeHtml(d.serial)}</span>`:''}<span>Geändert: ${escapeHtml(formatDateTime(d.changedAt))}</span></div>
+    <span class="device-card-chevron material-symbols-rounded">chevron_right</span>
+  </article>`;
+}
+function findOverviewDevice(id){const n=normalizeClientId(id);return devices.find(d=>normalizeClientId(d.id)===n)||null}
+function formatDateTime(value){
+  if(!value)return '–';const d=new Date(value);if(Number.isNaN(d.getTime()))return String(value);
+  return new Intl.DateTimeFormat('de-DE',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(d).replace(',',' ·');
+}
+function detailRow(label,value){return `<div><small>${escapeHtml(label)}</small><strong>${escapeHtml(value||'–')}</strong></div>`}
+function openDeviceDetails(id){
+  const d=findOverviewDevice(id);if(!d)return;
+  const where=deviceStatusGroup(d)==='ausgegeben'?(d.employee||'Nicht zugeordnet'):(d.location||'Nicht zugeordnet');
+  $('modalRoot').innerHTML=`<div class="modal-backdrop" id="modalBackdrop"><div class="modal device-detail-modal">
+    <div class="modal-head"><div><small class="detail-id">${escapeHtml(formatDeviceId(d.id))}</small><h2>${escapeHtml(d.name||'Ohne Bezeichnung')}</h2></div><button class="icon-button" id="closeModal"><span class="material-symbols-rounded">close</span></button></div>
+    <div class="modal-body">
+      <div class="detail-status-line"><span class="status-pill ${statusClass(d)}">${escapeHtml(statusLabel(d))}</span><strong>${escapeHtml(where)}</strong></div>
+      <div class="device-detail-grid">
+        ${detailRow('Modell',d.model)}${detailRow('Hersteller',d.manufacturer)}${detailRow('Seriennummer',d.serial)}${detailRow('Aktueller Mitarbeiter',d.employee)}${detailRow('Einsatzort / Standort',d.location)}${detailRow('Ausgegeben am',formatDateTime(d.issuedAt))}${detailRow('Letzte Änderung',formatDateTime(d.changedAt))}${detailRow('Bearbeitet von',d.handledBy)}
+      </div>
+      <div class="detail-actions"><button id="detailBookBtn" class="btn green"><span class="material-symbols-rounded">swap_horiz</span>${deviceStatusGroup(d)==='ausgegeben'?'Rücknahme öffnen':'Ausgabe öffnen'}</button><button id="detailQrBtn" class="btn"><span class="material-symbols-rounded">print</span>QR nachdrucken</button></div>
+    </div></div></div>`;
+  $('closeModal').onclick=closeModal;$('modalBackdrop').onclick=e=>{if(e.target.id==='modalBackdrop')closeModal()};
+  $('detailBookBtn').onclick=()=>bookFromOverview(d.id);$('detailQrBtn').onclick=()=>qrFromOverview(d.id);
+}
+async function bookFromOverview(id){closeModal();await showPage('booking',{autoScan:false});await stopScanner();$('rawQr').value=normalizeClientId(id);await preview(normalizeClientId(id))}
+async function qrFromOverview(id){closeModal();await showPage('qr');setQrMode('reprint');$('reprintDeviceId').value=normalizeClientId(id);await loadDeviceForReprint()}
 
 function normalizeClientId(value){return String(value||'').replace(/\s+/g,'').replace(/[^A-Za-z0-9._-]/g,'').toUpperCase()}
 function formatDeviceId(value){const id=normalizeClientId(value);return /^\d{6}$/.test(id)?id.replace(/(\d{3})(\d{3})/,'$1 $2'):id}

@@ -81,6 +81,7 @@
       <main class="main">
         <nav class="app-nav" aria-label="ToolTrack Bereiche">
           <button id="bookingNav" class="nav-btn active"><span class="material-symbols-rounded">qr_code_scanner</span>Gerät buchen</button>
+          <button id="overviewNav" class="nav-btn"><span class="material-symbols-rounded">inventory_2</span>Übersicht</button>
           <button id="qrNav" class="nav-btn"><span class="material-symbols-rounded">qr_code_2</span>QR-Codes</button>
         </nav>
 
@@ -149,6 +150,59 @@
                 <div id="bookingMsg" class="message hidden"></div>
               </section>
             </div>
+          </div>
+        </section>
+
+
+        <section id="overviewPage" class="page hidden">
+          <div class="page-header overview-page-header">
+            <div>
+              <h1>Geräteübersicht</h1>
+              <p>Sofort sehen, welches Gerät im Lager liegt, ausgegeben ist oder sich an einem Einsatzort befindet.</p>
+            </div>
+            <button id="refreshOverviewBtn" class="btn"><span class="material-symbols-rounded">refresh</span>Aktualisieren</button>
+          </div>
+
+          <div class="overview-stats" aria-label="Gerätestatistik">
+            <button class="stat-card active" data-overview-filter="all"><small>Gesamt</small><strong id="statAll">0</strong></button>
+            <button class="stat-card status-in-stock" data-overview-filter="lager"><small>Im Lager</small><strong id="statStock">0</strong></button>
+            <button class="stat-card status-issued" data-overview-filter="ausgegeben"><small>Ausgegeben</small><strong id="statIssued">0</strong></button>
+            <button class="stat-card status-unclear" data-overview-filter="unklar"><small>Unklar</small><strong id="statUnclear">0</strong></button>
+          </div>
+
+          <section class="card card-pad overview-toolbar-card">
+            <div class="overview-search-row">
+              <div class="search-field">
+                <span class="material-symbols-rounded">search</span>
+                <input id="overviewSearch" type="search" autocomplete="off" placeholder="ID, Gerät, Hersteller, Seriennummer, Mitarbeiter oder Einsatzort suchen …">
+                <button id="clearOverviewSearch" class="search-clear hidden" type="button" aria-label="Suche löschen"><span class="material-symbols-rounded">close</span></button>
+              </div>
+              <select id="overviewSort" class="select overview-sort" aria-label="Sortierung">
+                <option value="changed-desc">Zuletzt geändert</option>
+                <option value="id-asc">Geräte-ID</option>
+                <option value="name-asc">Bezeichnung</option>
+                <option value="location-asc">Standort / Mitarbeiter</option>
+              </select>
+            </div>
+            <div class="filter-chips" id="overviewFilters">
+              <button class="filter-chip active" data-overview-filter="all">Alle</button>
+              <button class="filter-chip" data-overview-filter="lager">Im Lager</button>
+              <button class="filter-chip" data-overview-filter="ausgegeben">Ausgegeben</button>
+              <button class="filter-chip" data-overview-filter="unklar">Unklar</button>
+            </div>
+            <div class="overview-result-line">
+              <strong id="overviewResultCount">0 Geräte</strong>
+              <span id="overviewUpdatedAt">Noch nicht geladen</span>
+            </div>
+          </section>
+
+          <div id="overviewMessage" class="message hidden"></div>
+          <div id="overviewLoading" class="overview-loading hidden"><div class="spinner"></div><span>Geräte werden geladen …</span></div>
+          <div id="deviceList" class="device-list"></div>
+          <div id="overviewEmpty" class="card card-pad empty-state hidden">
+            <span class="material-symbols-rounded">search_off</span>
+            <h2>Kein Gerät gefunden</h2>
+            <p>Suchbegriff oder Filter ändern.</p>
           </div>
         </section>
 
